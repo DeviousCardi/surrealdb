@@ -266,13 +266,21 @@ impl Kind {
 	/// Returns true if this type permits access to named sub-fields.
 	///
 	/// This covers `object`, `any`, literal object types (e.g. `{ key: string }`),
-	/// and union types where every non-none variant permits sub-field access.
+	/// and union types where every variant other than `none` and `null` permits
+	/// sub-field access.
+	///
+	/// `null` is exempted for the same reason as `none`: it carries no named
+	/// sub-fields of its own, and reading a sub-field of a `NULL` value yields
+	/// `NONE` rather than an error, so a `null` variant never makes the
+	/// sub-field path invalid. Every other variant must still permit the
+	/// access on its own, so a union mixing an object with a concrete scalar
+	/// (e.g. `null | string | { city: string }`) is still rejected.
 	pub(crate) fn allows_sub_fields(&self) -> bool {
 		match self {
 			Kind::Any | Kind::Object | Kind::Array(..) | Kind::Set(..) => true,
 			Kind::Literal(KindLiteral::Object(_) | KindLiteral::Array(_)) => true,
 			Kind::Either(kinds) => {
-				kinds.iter().all(|k| matches!(k, Kind::None) || k.allows_sub_fields())
+				kinds.iter().all(|k| matches!(k, Kind::None | Kind::Null) || k.allows_sub_fields())
 			}
 			_ => false,
 		}
@@ -330,9 +338,9 @@ impl Kind {
 			match self {
 				Kind::Object => return matches!(path.first(), Some(Part::Field(_) | Part::All)),
 				Kind::Either(kinds) => {
-					return kinds
-						.iter()
-						.all(|k| matches!(k, Kind::None) || k.allows_nested_kind(path, kind));
+					return kinds.iter().all(|k| {
+						matches!(k, Kind::None | Kind::Null) || k.allows_nested_kind(path, kind)
+					});
 				}
 				Kind::Array(inner, len) | Kind::Set(inner, len) => {
 					return match path.first() {
@@ -359,9 +367,9 @@ impl Kind {
 			// Check if the literal matches the kind
 			Kind::Literal(lit) => lit.allows_nested_kind(path, kind),
 			// Check if any of the kinds in the either match the kind
-			Kind::Either(kinds) => {
-				kinds.iter().all(|k| matches!(k, Kind::None) || k.allows_nested_kind(path, kind))
-			}
+			Kind::Either(kinds) => kinds
+				.iter()
+				.all(|k| matches!(k, Kind::None | Kind::Null) || k.allows_nested_kind(path, kind)),
 			_ => false,
 		}
 	}
